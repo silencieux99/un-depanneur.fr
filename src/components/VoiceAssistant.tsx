@@ -39,16 +39,33 @@ export default function VoiceAssistant() {
 
             if (SpeechRecognition) {
                 const recognition = new SpeechRecognition();
-                recognition.continuous = false;
-                recognition.interimResults = false;
+                recognition.continuous = true;
+                recognition.interimResults = true;
                 recognition.lang = "fr-FR";
+
+                let silenceTimer: NodeJS.Timeout;
 
                 recognition.onstart = () => setIsListening(true);
                 recognition.onend = () => setIsListening(false);
+                recognition.onerror = (e: any) => console.error("Speech error", e);
+
                 recognition.onresult = (event: any) => {
-                    const text = event.results[0][0].transcript;
-                    setTranscript(text);
-                    handleUserMessage(text);
+                    let finalTranscript = "";
+                    let interimTranscript = "";
+
+                    for (let i = event.resultIndex; i < event.results.length; ++i) {
+                        if (event.results[i].isFinal) {
+                            finalTranscript += event.results[i][0].transcript;
+                        } else {
+                            interimTranscript += event.results[i][0].transcript;
+                        }
+                    }
+
+                    if (interimTranscript) setTranscript(interimTranscript);
+                    if (finalTranscript) {
+                        setTranscript(finalTranscript);
+                        handleUserMessage(finalTranscript);
+                    }
                 };
                 recognitionRef.current = recognition;
             }
@@ -159,8 +176,13 @@ export default function VoiceAssistant() {
         if (isListening) {
             recognitionRef.current?.stop();
         } else {
+            setTranscript(""); // Clear previous transcript
             if (synthRef.current?.speaking) synthRef.current.cancel();
-            recognitionRef.current?.start();
+            try {
+                recognitionRef.current?.start();
+            } catch (e) {
+                console.error("Mic start error (already started?)", e);
+            }
         }
     };
 
@@ -300,7 +322,7 @@ export default function VoiceAssistant() {
                                         <span className="leading-tight">
                                             {geoStatus === "locating" && "Localisation en cours..."}
                                             {geoStatus === "success" && "Position GPS acquise"}
-                                            {geoStatus === "denied" && "GPS désactivé (optionnel)"}
+                                            {geoStatus === "denied" && (typeof window !== 'undefined' && !window.isSecureContext ? "GPS nécessite HTTPS (Sécurité)" : "GPS refusé (Vérifiez réglages)")}
                                             {geoStatus === "error" && "GPS indisponible (optionnel)"}
                                             {geoStatus === "idle" && "Acquisition GPS..."}
                                         </span>

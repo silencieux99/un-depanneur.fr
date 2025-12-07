@@ -6,12 +6,15 @@ export async function POST(req: NextRequest) {
     try {
         const { history, message, userInfo } = await req.json();
 
-        // Inject system context if it's the first message or if userInfo is provided
-        let historyWithContext = history || [];
+        // Format history for Gemini (ensure correct role mapping)
+        const geminiHistory = (history || []).map((msg: any) => ({
+            role: msg.role === 'model' ? 'model' : 'user',
+            parts: msg.parts.map((p: any) => ({ text: p.text }))
+        }));
 
         // Use Gemini to process conversation/intent as usual
         const chat = model.startChat({
-            history: historyWithContext,
+            history: geminiHistory,
         });
 
         const result = await chat.sendMessage(message);
@@ -52,8 +55,8 @@ export async function POST(req: NextRequest) {
         }
 
         return NextResponse.json({ response, completed: false });
-    } catch (error) {
-        console.error(error);
-        return NextResponse.json({ error: "Internal Server Error" }, { status: 500 });
+    } catch (error: any) {
+        console.error("API Error Detailed:", error?.message, error?.stack);
+        return NextResponse.json({ error: "Internal Server Error", details: error?.message }, { status: 500 });
     }
 }

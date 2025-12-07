@@ -8,6 +8,12 @@ const outfit = Outfit({ subsets: ["latin"], variable: "--font-outfit" });
 export const metadata: Metadata = {
   title: "Un-Depanneur.fr | Assistance à la demande",
   description: "Dépannage rapide et premium en Île-de-France.",
+  viewport: {
+    width: "device-width",
+    initialScale: 1,
+    maximumScale: 1,
+    userScalable: false, // Prevents iOS input zoom
+  }
 };
 
 export default function RootLayout({
