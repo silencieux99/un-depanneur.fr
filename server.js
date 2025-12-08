@@ -12,7 +12,7 @@ if (dev) {
     require('dotenv').config({ path: '.env.local' });
 }
 
-const PORT = 3000;
+const PORT = process.env.PORT || 3000;
 
 app.prepare().then(() => {
     const server = createServer((req, res) => {
