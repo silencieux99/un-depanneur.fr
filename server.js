@@ -44,7 +44,7 @@ app.prepare().then(() => {
         }
 
         // Connexion à Gemini Live API (v1alpha Bidi)
-        const targetUrl = `wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1alpha.GenerativeService.BidiGenerateContent?key=${apiKey}`;
+        const targetUrl = `wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent?key=${apiKey}`;
 
         let googleWs = null;
 
