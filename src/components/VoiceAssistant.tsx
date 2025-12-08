@@ -24,7 +24,12 @@ export default function VoiceAssistant() {
     const [isProcessing, setIsProcessing] = useState(false);
     const [isSpeaking, setIsSpeaking] = useState(false);
     const [messages, setMessages] = useState<Message[]>([]);
-    const messagesRef = useRef<Message[]>([]); // Ref to keep track of messages in event listeners
+
+    // Refs for state access in callbacks/unmount
+    const messagesRef = useRef<Message[]>([]);
+    const userInfoRef = useRef<UserInfo>({ name: "", phone: "", location: null });
+    const sessionActiveRef = useRef(false);
+
     const [transcript, setTranscript] = useState("");
     const [completed, setCompleted] = useState(false);
     const [mounted, setMounted] = useState(false);
@@ -32,6 +37,41 @@ export default function VoiceAssistant() {
     const recognitionRef = useRef<any>(null);
     const synthRef = useRef<SpeechSynthesis | null>(null);
 
+    // Keep refs detailed synced with state
+    useEffect(() => {
+        userInfoRef.current = userInfo;
+    }, [userInfo]);
+
+    useEffect(() => {
+        messagesRef.current = messages;
+    }, [messages]);
+
+    const sendTelegramRecap = async () => {
+        console.log("Sending Telegram recap...", userInfoRef.current);
+        if (!userInfoRef.current.name || !userInfoRef.current.phone) return;
+
+        const payload = {
+            userInfo: userInfoRef.current,
+            history: messagesRef.current
+        };
+
+        try {
+            // Use fetch with keepalive which is better supported for unloads than sendBeacon for JSON
+            await fetch("/api/telegram", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify(payload),
+                keepalive: true
+            });
+        } catch (error) {
+            console.error("Failed to send Telegram recap", error);
+            // Fallback to sendBeacon if fetch fails (rare case)
+            const blob = new Blob([JSON.stringify(payload)], { type: 'application/json' });
+            navigator.sendBeacon('/api/telegram', blob);
+        }
+    };
+
+    // Initialization
     useEffect(() => {
         setMounted(true);
         if (typeof window !== "undefined") {
@@ -71,19 +111,49 @@ export default function VoiceAssistant() {
 
             synthRef.current = window.speechSynthesis;
         }
+
+        // Handle Unload / Visibility Change
+        const handleUnload = () => {
+            if (sessionActiveRef.current) {
+                sendTelegramRecap();
+            }
+        };
+
+        // Covering both unload and visibilitychange maximizes chances on mobile
+        window.addEventListener("beforeunload", handleUnload);
+        document.addEventListener("visibilitychange", () => {
+            if (document.visibilityState === 'hidden' && sessionActiveRef.current) {
+                sendTelegramRecap();
+            }
+        });
+
+        return () => {
+            window.removeEventListener("beforeunload", handleUnload);
+            // Note: event listener referencing sessionActiveRef.current works because ref persists
+        };
+
     }, []);
 
-    // Cleanup when leaving chat mode
+    // Session State Management & Cleanup
     useEffect(() => {
         if (captureMode === "idle") {
+            // Cleanup media first
             try {
                 recognitionRef.current?.stop();
             } catch (e) { }
             if (synthRef.current) synthRef.current.cancel();
             setIsListening(false);
             setIsSpeaking(false);
+
+            // Send Recap Logic
+            if (sessionActiveRef.current) {
+                sendTelegramRecap();
+                sessionActiveRef.current = false;
+                setMessages([]);
+                setTranscript("");
+            }
         } else if (captureMode === "chat" && recognitionRef.current && !isListening) {
-            // Auto-start on enter chat
+            // START SESSION
             console.log("Auto-starting microphone...");
             try {
                 recognitionRef.current.start();
@@ -135,6 +205,7 @@ export default function VoiceAssistant() {
     const handleFormSubmit = (e: React.FormEvent) => {
         e.preventDefault();
         if (userInfo.name && userInfo.phone) {
+            sessionActiveRef.current = true; // Mark session as active
             setCaptureMode("chat");
             const locationTxt = userInfo.location ? `GPS: ${userInfo.location.lat},${userInfo.location.lng}` : "GPS: Non disponible";
             handleUserMessage(`[SYSTEM_INIT] Client: ${userInfo.name}, Tél: ${userInfo.phone}, ${locationTxt}. Début intervention.`);
@@ -181,7 +252,7 @@ export default function VoiceAssistant() {
                 body: JSON.stringify({
                     history: messages,
                     message: text,
-                    userInfo: userInfo
+                    userInfo: userInfo // Use state directly here as we are in render cycle usually
                 }),
             });
 
@@ -204,7 +275,7 @@ export default function VoiceAssistant() {
 
     const toggleListening = () => {
         if (isListening) {
-            // "Hang Up" logic -> Close conversation
+            // "Hang Up" logic -> Close conversation which triggers Effect -> sends Telegram
             setCaptureMode("idle");
         } else {
             setTranscript("");
