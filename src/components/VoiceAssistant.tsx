@@ -8,8 +8,8 @@ import { Volume2, Loader2, CheckCircle2, User, Phone, ShieldCheck, Activity, X }
 // --- Configuration ---
 const SAMPLE_RATE = 16000;
 
-// --- Canvas Visualizer Component ---
-const CanvasVisualizer = ({ mode, volume }: { mode: string, volume: number }) => {
+// --- Canvas Visualizer Component (Optimized) ---
+const CanvasVisualizer = ({ mode, volumeRef }: { mode: string, volumeRef: React.MutableRefObject<number> }) => {
     const canvasRef = useRef<HTMLCanvasElement>(null);
 
     useEffect(() => {
@@ -24,39 +24,49 @@ const CanvasVisualizer = ({ mode, volume }: { mode: string, volume: number }) =>
         const resize = () => {
             canvas.width = window.innerWidth;
             canvas.height = window.innerHeight;
+            // High DPI support
+            const dpr = window.devicePixelRatio || 1;
+            canvas.width = window.innerWidth * dpr;
+            canvas.height = window.innerHeight * dpr;
+            ctx.scale(dpr, dpr);
+            canvas.style.width = `${window.innerWidth}px`;
+            canvas.style.height = `${window.innerHeight}px`;
         };
         window.addEventListener('resize', resize);
         resize();
 
         const draw = () => {
-            const width = canvas.width;
-            const height = canvas.height;
+            // Read volume directly from Ref (No React Render lag)
+            let volume = volumeRef.current;
+            // Smooth decay for volume to avoid jitter
+            // (Note: we interact with the raw ref value, smoothing can be done here if needed)
+
+            const width = window.innerWidth; // Use logical size
+            const height = window.innerHeight;
             const centerY = height / 2;
 
             ctx.clearRect(0, 0, width, height);
 
-            // Settings responsive to mode/volume
+            // Settings
             let amplitude = mode === 'listening' ? 50 + (volume * 400) : mode === 'speaking' ? 40 + (volume * 150) : 10;
             let speed = mode === 'speaking' ? 0.2 : 0.05;
-            // Colors: Emerald (Listening), Blue (Speaking), Amber (Connecting)
             let colorStr = mode === 'speaking' ? '96, 165, 250' : mode === 'listening' ? '52, 211, 153' : '251, 191, 36';
 
             if (mode === 'connecting') { amplitude = 20; speed = 0.1; }
 
             phase += speed;
 
-            // Draw 3 layers of waves for 3D depth effect
+            // Draw 3 layers of refined waves
             for (let i = 0; i < 3; i++) {
                 ctx.beginPath();
-                ctx.lineWidth = i === 1 ? 3 : 1; // Main line thicker
-                ctx.strokeStyle = `rgba(${colorStr}, ${0.8 - (i * 0.2)})`;
+                ctx.lineWidth = i === 1 ? 2 : 1;
+                ctx.strokeStyle = `rgba(${colorStr}, ${i === 1 ? 0.8 : 0.4})`;
 
-                for (let x = 0; x < width; x++) {
-                    // Complex wave math for organic "Siri/Jarvis" look
-                    // Combines sine waves with different frequencies and phases
+                // Draw Sine Wave
+                for (let x = 0; x <= width; x += 5) { // Step 5 for performance optimization
                     const y = centerY +
-                        Math.sin((x * 0.008) + phase + (i * 0.5)) * amplitude * Math.sin(x / width * Math.PI) + // Main carrier
-                        Math.sin((x * 0.02) + phase * 1.5) * (amplitude * 0.3); // Detail
+                        Math.sin((x * 0.005) + phase + (i * 0.5)) * amplitude * Math.sin(x / width * Math.PI) +
+                        Math.sin((x * 0.015) + phase * 2) * (amplitude * 0.3);
 
                     if (x === 0) ctx.moveTo(x, y);
                     else ctx.lineTo(x, y);
@@ -64,10 +74,10 @@ const CanvasVisualizer = ({ mode, volume }: { mode: string, volume: number }) =>
                 ctx.stroke();
             }
 
-            // Central Glow
+            // Glow
             if (mode === 'speaking' || (mode === 'listening' && volume > 0.05)) {
                 const gradient = ctx.createRadialGradient(width / 2, height / 2, 10, width / 2, height / 2, 300);
-                gradient.addColorStop(0, `rgba(${colorStr}, 0.15)`);
+                gradient.addColorStop(0, `rgba(${colorStr}, 0.1)`);
                 gradient.addColorStop(1, `rgba(${colorStr}, 0)`);
                 ctx.fillStyle = gradient;
                 ctx.fillRect(0, 0, width, height);
@@ -82,12 +92,12 @@ const CanvasVisualizer = ({ mode, volume }: { mode: string, volume: number }) =>
             window.removeEventListener('resize', resize);
             cancelAnimationFrame(animationId);
         };
-    }, [mode, volume]);
+    }, [mode]); // Removed volume from dependency array!
 
     return <canvas ref={canvasRef} className="absolute inset-0 z-0 w-full h-full" />;
 };
 
-// --- Audio Utils (Restored) ---
+// --- Audio Utils ---
 function floatTo16BitPCM(input: Float32Array) {
     const output = new Int16Array(input.length);
     for (let i = 0; i < input.length; i++) {
@@ -118,13 +128,13 @@ export default function VoiceAssistant() {
     const [userInfo, setUserInfo] = useState<UserInfo>({ name: "", phone: "", location: null });
     const [geoStatus, setGeoStatus] = useState<"idle" | "locating" | "success" | "error" | "denied">("idle");
 
-    // Status & UI
     const [status, setStatus] = useState<"disconnected" | "connecting" | "connected" | "listening" | "speaking">("disconnected");
-    const [volumeLevel, setVolumeLevel] = useState(0);
     const [errorMsg, setErrorMsg] = useState<string | null>(null);
     const [mounted, setMounted] = useState(false);
 
-    // Refs
+    // High Performance Audio Refs
+    const volumeRef = useRef(0); // Mutable ref for animation loop (No Re-renders)
+
     const userInfoRef = useRef<UserInfo>({ name: "", phone: "", location: null });
     const sessionActiveRef = useRef(false);
     const wsRef = useRef<WebSocket | null>(null);
@@ -132,13 +142,10 @@ export default function VoiceAssistant() {
     const scriptProcessorRef = useRef<ScriptProcessorNode | null>(null);
     const sourceRef = useRef<MediaStreamAudioSourceNode | null>(null);
     const streamRef = useRef<MediaStream | null>(null);
-
-    // Audio Queue
     const audioQueueRef = useRef<Float32Array[]>([]);
     const isPlayingRef = useRef(false);
     const nextPlayTimeRef = useRef(0);
 
-    // Sync Refs
     useEffect(() => { userInfoRef.current = userInfo; }, [userInfo]);
 
     useEffect(() => {
@@ -170,11 +177,11 @@ export default function VoiceAssistant() {
         } catch { }
     };
 
-    // --- Core Session Hardware ---
     const startSession = async () => {
         setErrorMsg(null);
         setStatus("connecting");
         sessionActiveRef.current = true;
+        volumeRef.current = 0;
 
         try {
             const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
@@ -186,18 +193,21 @@ export default function VoiceAssistant() {
                 setStatus("connected");
                 initAudioInput();
 
-                // USER SCENARIO CONFIGURATION
                 ws.send(JSON.stringify({
                     client_content: {
                         turns: [{
                             role: "user",
                             parts: [{
-                                text: `[SYSTEM] Tu es Sarah, régulatrice d'urgence. Le client s'appelle ${userInfoRef.current.name}.
-SCÉNARIO OBLIGATOIRE :
-1. Dis d'abord : "Bonjour ${userInfoRef.current.name}, quel est votre problème ?"
-2. Attends sa réponse.
-3. RASSURE-LE, puis dis : "Ne vous inquiétez pas. Nous avons reçu votre géolocalisation. Le dépanneur le plus proche vous rappellera dans 5 minutes excates."
-Donne des réponses courtes et rassurantes.` }]
+                                text: `[SYSTEM] Tu es Sarah de l'assistance dépannage. Le client est ${userInfoRef.current.name}.
+TON : Chaleureux, naturel, très empathique et souriant (friendly). Pas de phrases robotiques.
+
+SCÉNARIO :
+1. Commence JOYEUSEMENT par : "Bonjour ${userInfoRef.current.name} ! Je vous écoute, dites-moi tout, quel est le souci avec votre véhicule ?"
+2. Écoute le problème.
+3. SI URGENCE : Rassure tout de suite ("Ouch, pas de panique, on gère ça !"), confirme que tu as bien reçu sa géolocalisation, et promets qu'un technicien le rappelle dans 5 minutes PILE.
+4. SI RENDEZ-VOUS : Dis "C'est noté ! Je transmets ça au planning, on vous rappelle très vite pour confirmer le créneau."
+5. TOUJOURS FINIR par : "Est-ce que je peux faire autre chose pour vous aider ?"
+6. Si le client dit NON : Dis chaleureusement "Super, je lance l'intervention. Vous pouvez raccrocher. Courage et bonne journée !" et arrête de parler.` }]
                         }],
                         turn_complete: true
                     }
@@ -232,8 +242,8 @@ Donne des réponses courtes et rassurantes.` }]
         if (scriptProcessorRef.current) { scriptProcessorRef.current.disconnect(); scriptProcessorRef.current = null; }
         if (sourceRef.current) { sourceRef.current.disconnect(); sourceRef.current = null; }
         if (audioCtxRef.current) { audioCtxRef.current.close(); audioCtxRef.current = null; }
-
         setStatus("disconnected");
+        volumeRef.current = 0;
         if (sessionActiveRef.current) {
             sendTelegramRecap("Raccroché");
             sessionActiveRef.current = false;
@@ -258,13 +268,16 @@ Donne des réponses courtes et rassurantes.` }]
             processor.onaudioprocess = (e) => {
                 const inputData = e.inputBuffer.getChannelData(0);
 
-                // Volume Meter Check
+                // Volume Calc (Direct Ref Update - No React State Trigger)
                 let sum = 0;
                 for (let i = 0; i < inputData.length; i++) sum += inputData[i] * inputData[i];
                 const rms = Math.sqrt(sum / inputData.length);
-                setVolumeLevel(rms); // Updates React State for Visualizer!
 
-                // Send Audio to Gemini
+                // Smooth Smoothing
+                const target = rms;
+                volumeRef.current += (target - volumeRef.current) * 0.5;
+
+                // Send Audio
                 if (wsRef.current?.readyState === WebSocket.OPEN) {
                     wsRef.current.send(JSON.stringify({
                         realtime_input: {
@@ -291,13 +304,18 @@ Donne des réponses courtes et rassurantes.` }]
             setStatus("speaking");
             data.serverContent.modelTurn.parts.forEach((part: any) => {
                 if (part.inlineData && part.inlineData.mimeType.startsWith("audio/pcm")) {
-                    // Native Audio Output Only
                     const byteCharacters = atob(part.inlineData.data);
                     const byteNumbers = new Uint8Array(byteCharacters.length);
                     for (let i = 0; i < byteCharacters.length; i++) byteNumbers[i] = byteCharacters.charCodeAt(i);
                     const pcm16 = new Int16Array(byteNumbers.buffer);
                     const float32 = new Float32Array(pcm16.length);
                     for (let i = 0; i < pcm16.length; i++) float32[i] = pcm16[i] / 32768;
+
+                    // Simulate approximate volume for output (visualizer feedback when AI speaks)
+                    let sum = 0; for (let i = 0; i < float32.length; i += 10) sum += float32[i] * float32[i];
+                    const outputVol = Math.sqrt(sum / (float32.length / 10)) * 5; // Boost for visuals
+                    volumeRef.current = outputVol;
+
                     queueAudio(float32);
                 }
             });
@@ -335,7 +353,6 @@ Donne des réponses courtes et rassurantes.` }]
         source.onended = () => playQueue();
     };
 
-    // --- Modal Logic ---
     const triggerGeolocation = () => {
         setGeoStatus("locating");
         if (!navigator.geolocation) { setGeoStatus("error"); return; }
@@ -347,7 +364,6 @@ Donne des réponses courtes et rassurantes.` }]
     };
 
     const handleStart = () => {
-        // iOS unlock audio context (silent)
         const AudioContext = window.AudioContext || (window as any).webkitAudioContext;
         if (AudioContext) {
             const ctx = new AudioContext();
@@ -368,7 +384,6 @@ Donne des réponses courtes et rassurantes.` }]
 
     return (
         <>
-            {/* Fab Button */}
             <div className="w-full flex justify-center sticky bottom-6 md:relative md:bottom-auto z-40 px-4 md:px-0">
                 {captureMode === "idle" && (
                     <motion.div layout whileHover={{ scale: 1.05 }} whileTap={{ scale: 0.95 }} onClick={handleStart} className="relative group bg-white/10 backdrop-blur-xl border border-white/20 rounded-full shadow-[0_0_40px_rgba(0,0,0,0.6)] p-3 cursor-pointer animate-[pulse_3s_ease-in-out_infinite]">
@@ -382,7 +397,6 @@ Donne des réponses courtes et rassurantes.` }]
 
             {mounted && createPortal(
                 <AnimatePresence>
-                    {/* --- PREMIUM FORM MODAL --- */}
                     {captureMode === "form" && (
                         <motion.div
                             initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
@@ -403,93 +417,44 @@ Donne des réponses courtes et rassurantes.` }]
                                         Veuillez vous identifier pour accéder au service d'assistance prioritaire.
                                     </p>
                                 </div>
-
                                 <form onSubmit={handleFormSubmit} className="px-8 pb-8 space-y-5">
                                     <div className="space-y-4">
                                         <div className="group relative">
                                             <User className="absolute left-0 top-3 w-5 h-5 text-slate-500 group-focus-within:text-blue-400 transition-colors" />
-                                            <input
-                                                type="text" required placeholder="Votre Nom"
-                                                className="w-full bg-transparent border-b border-white/10 py-2.5 pl-8 text-white placeholder:text-slate-600 focus:border-blue-500 outline-none transition-all font-light"
-                                                value={userInfo.name} onChange={e => setUserInfo({ ...userInfo, name: e.target.value })}
-                                            />
+                                            <input type="text" required placeholder="Votre Nom" className="w-full bg-transparent border-b border-white/10 py-2.5 pl-8 text-white placeholder:text-slate-600 focus:border-blue-500 outline-none transition-all font-light" value={userInfo.name} onChange={e => setUserInfo({ ...userInfo, name: e.target.value })} />
                                         </div>
                                         <div className="group relative">
                                             <Phone className="absolute left-0 top-3 w-5 h-5 text-slate-500 group-focus-within:text-blue-400 transition-colors" />
-                                            <input
-                                                type="tel" required placeholder="Numéro de Téléphone"
-                                                className="w-full bg-transparent border-b border-white/10 py-2.5 pl-8 text-white placeholder:text-slate-600 focus:border-blue-500 outline-none transition-all font-light"
-                                                value={userInfo.phone} onChange={e => setUserInfo({ ...userInfo, phone: e.target.value })}
-                                            />
+                                            <input type="tel" required placeholder="Numéro de Téléphone" className="w-full bg-transparent border-b border-white/10 py-2.5 pl-8 text-white placeholder:text-slate-600 focus:border-blue-500 outline-none transition-all font-light" value={userInfo.phone} onChange={e => setUserInfo({ ...userInfo, phone: e.target.value })} />
                                         </div>
                                     </div>
-
-                                    {/* Geo Status Minimalist */}
-                                    <div className="flex items-center justify-center gap-2 py-2">
-                                        {geoStatus === 'locating' && <Loader2 className="w-3 h-3 text-blue-500 animate-spin" />}
-                                        {geoStatus === 'success' && <CheckCircle2 className="w-3 h-3 text-emerald-500" />}
-                                        <span className={`text-xs ${geoStatus === 'success' ? 'text-emerald-500' : 'text-slate-500'}`}>
-                                            {geoStatus === 'locating' ? 'Localisation en cours...' : geoStatus === 'success' ? 'Position sécurisée' : 'Localisation requise'}
-                                        </span>
-                                    </div>
-
-                                    <button
-                                        type="submit" disabled={!userInfo.name || !userInfo.phone}
-                                        className="w-full bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white font-medium py-3.5 rounded-xl shadow-lg shadow-blue-900/20 transition-all active:scale-[0.98] disabled:opacity-50 disabled:cursor-not-allowed"
-                                    >
-                                        Établir la Connexion
-                                    </button>
+                                    <div className="flex items-center justify-center gap-2 py-2"><span className={`text-xs ${geoStatus === 'success' ? 'text-emerald-500' : 'text-slate-500'}`}>{geoStatus === 'locating' ? 'Localisation en cours...' : geoStatus === 'success' ? 'Position sécurisée' : 'Localisation requise'}</span></div>
+                                    <button type="submit" disabled={!userInfo.name || !userInfo.phone} className="w-full bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white font-medium py-3.5 rounded-xl shadow-lg shadow-blue-900/20 transition-all active:scale-[0.98] disabled:opacity-50 disabled:cursor-not-allowed">Établir la Connexion</button>
                                 </form>
                             </motion.div>
                         </motion.div>
                     )}
 
-                    {/* --- FULLSCREEN AUDIO VISUALIZER --- */}
                     {captureMode === "chat" && (
-                        <motion.div
-                            initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
-                            className="fixed inset-0 z-[99999] bg-black flex flex-col items-center justify-center overflow-hidden"
-                        >
-                            {/* Background Atmosphere */}
+                        <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="fixed inset-0 z-[99999] bg-black flex flex-col items-center justify-center overflow-hidden">
                             <div className="absolute inset-0 bg-[radial-gradient(circle_at_center,_var(--tw-gradient-stops))] from-blue-900/10 via-black to-black opacity-80" />
-
-                            {/* Header (Minimal) */}
                             <div className="absolute top-0 left-0 w-full p-6 flex justify-between items-start z-50">
                                 <div>
                                     <div className="flex items-center gap-2 backdrop-blur-md bg-white/5 rounded-full px-4 py-1.5 border border-white/5">
                                         <Activity className={`w-4 h-4 ${status === 'connected' || status === 'listening' ? "text-emerald-500" : "text-amber-500"}`} />
-                                        <span className="text-[10px] font-mono text-white/60 uppercase tracking-[0.2em] pt-0.5">
-                                            {status === 'connected' ? 'CANAL SÉCURISÉ' : status === 'listening' ? 'ÉCOUTE ACTIVE' : status === 'speaking' ? 'TRANSMISSION IA' : 'INITIALISATION...'}
-                                        </span>
+                                        <span className="text-[10px] font-mono text-white/60 uppercase tracking-[0.2em] pt-0.5">{status === 'connected' ? 'CANAL SÉCURISÉ' : status === 'listening' ? 'ÉCOUTE ACTIVE' : status === 'speaking' ? 'TRANSMISSION IA' : 'INITIALISATION...'}</span>
                                     </div>
                                 </div>
-                                <button onClick={() => setCaptureMode("idle")} className="p-3 text-white/50 hover:text-white transition-colors bg-white/5 hover:bg-white/10 rounded-full backdrop-blur-md">
-                                    <X className="w-6 h-6" />
-                                </button>
+                                <button onClick={() => setCaptureMode("idle")} className="p-3 text-white/50 hover:text-white transition-colors bg-white/5 hover:bg-white/10 rounded-full backdrop-blur-md"><X className="w-6 h-6" /></button>
                             </div>
 
-                            {/* CANVAS VISUALIZER LAYER */}
-                            <CanvasVisualizer mode={status} volume={volumeLevel} />
+                            {/* OPTIMIZED VISUALIZER */}
+                            <CanvasVisualizer mode={status} volumeRef={volumeRef} />
 
-                            {/* Error Message Layer */}
-                            {errorMsg && (
-                                <div className="absolute z-50 text-red-300 font-light border border-red-500/20 bg-red-950/80 px-6 py-4 rounded-xl backdrop-blur-md max-w-xs text-center shadow-lg shadow-red-900/20">
-                                    {errorMsg}
-                                </div>
-                            )}
-
-                            {/* Bottom Control */}
+                            {errorMsg && <div className="absolute z-50 text-red-300 font-light border border-red-500/20 bg-red-950/80 px-6 py-4 rounded-xl backdrop-blur-md max-w-xs text-center shadow-lg shadow-red-900/20">{errorMsg}</div>}
                             <div className="absolute bottom-12 z-50 flex flex-col items-center gap-4">
-                                <motion.button
-                                    whileHover={{ scale: 1.05 }}
-                                    whileTap={{ scale: 0.95 }}
-                                    onClick={() => setCaptureMode("idle")}
-                                    className="w-20 h-20 rounded-full bg-red-500/10 backdrop-blur-md border border-red-500/30 text-red-500 flex items-center justify-center hover:bg-red-500 hover:text-white transition-all duration-300 shadow-[0_0_30px_rgba(220,38,38,0.2)]"
-                                >
-                                    <Phone className="w-8 h-8 rotate-[135deg]" />
-                                </motion.button>
+                                <motion.button whileHover={{ scale: 1.05 }} whileTap={{ scale: 0.95 }} onClick={() => setCaptureMode("idle")} className="w-20 h-20 rounded-full bg-red-500/10 backdrop-blur-md border border-red-500/30 text-red-500 flex items-center justify-center hover:bg-red-500 hover:text-white transition-all duration-300 shadow-[0_0_30px_rgba(220,38,38,0.2)]"><Phone className="w-8 h-8 rotate-[135deg]" /></motion.button>
                             </div>
-
                         </motion.div>
                     )}
                 </AnimatePresence>,
