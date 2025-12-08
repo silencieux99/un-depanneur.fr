@@ -148,7 +148,12 @@ export default function VoiceAssistant() {
 
             ws.onclose = () => {
                 console.log("WS Closed");
-                if (captureMode === "chat") setCaptureMode("idle");
+                if (status === "connecting" || status === "connected") {
+                    setErrorMsg("Connexion interrompue.");
+                    setStatus("disconnected");
+                }
+                // Do not auto-close, let user see error
+                // if (captureMode === "chat") setCaptureMode("idle");
             };
 
         } catch (e) {
@@ -191,6 +196,10 @@ export default function VoiceAssistant() {
 
     const initAudioInput = async () => {
         try {
+            if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+                throw new Error("HTTPS requis pour l'accès micro (ou localhost).");
+            }
+
             const stream = await navigator.mediaDevices.getUserMedia({ audio: { sampleRate: SAMPLE_RATE, channelCount: 1, echoCancellation: true } });
             streamRef.current = stream;
 

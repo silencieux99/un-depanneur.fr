@@ -7,7 +7,7 @@ const dev = process.env.NODE_ENV !== 'production';
 const app = next({ dev });
 const handle = app.getRequestHandler();
 
-// Charger les variables d'env locales si en dev
+// Charger les variables d'env
 if (dev) {
     require('dotenv').config({ path: '.env.local' });
 }
@@ -29,9 +29,8 @@ app.prepare().then(() => {
             wss.handleUpgrade(request, socket, head, (ws) => {
                 wss.emit('connection', ws, request);
             });
-        } else {
-            socket.destroy();
         }
+        // IMPORTANT: Else do NOTHING. Let Next.js HMR handle other paths.
     });
 
     wss.on('connection', (ws) => {
@@ -44,9 +43,7 @@ app.prepare().then(() => {
             return;
         }
 
-        // Connexion à Gemini Live API
-        // Modèle demandé : gemini-2.5-flash-live (hypothétique, on utilise le standard v1alpha host)
-        // L'URL standard pour le live multi-modal
+        // Connexion à Gemini Live API (v1alpha Bidi)
         const targetUrl = `wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1alpha.GenerativeService.BidiGenerateContent?key=${apiKey}`;
 
         let googleWs = null;
@@ -55,18 +52,17 @@ app.prepare().then(() => {
             googleWs = new WebSocket(targetUrl);
         } catch (e) {
             console.error("Failed to create Google WS", e);
-            ws.close();
+            ws.close(1011, "Failed to connect to upstream");
             return;
         }
 
         googleWs.on('open', () => {
             console.log('Connected to Google Gemini Live');
-            // Envoyer la configuration initiale si nécessaire
             const setupMsg = {
                 setup: {
-                    model: "models/gemini-2.0-flash-exp", // Utilisons le modèle expérimental Flash 2.0 qui supporte le Bidi (le plus proche de "2.5" demandé et disponible en live)
+                    model: "models/gemini-2.0-flash-exp",
                     generationConfig: {
-                        responseModalities: ["AUDIO"] // On veut que l'audio en retour pour le live
+                        responseModalities: ["AUDIO"]
                     }
                 }
             };
@@ -74,7 +70,6 @@ app.prepare().then(() => {
         });
 
         googleWs.on('message', (data) => {
-            // Relayer la réponse Google vers le Client
             if (ws.readyState === WebSocket.OPEN) {
                 ws.send(data);
             }
@@ -85,12 +80,11 @@ app.prepare().then(() => {
             if (ws.readyState === WebSocket.OPEN) ws.close(1011, "Upstream Error");
         });
 
-        googleWs.on('close', () => {
-            console.log('Google WS Closed');
+        googleWs.on('close', (code, reason) => {
+            console.log(`Google WS Closed. Code: ${code}, Reason: ${reason}`);
             if (ws.readyState === WebSocket.OPEN) ws.close();
         });
 
-        // Relayer les messages Client vers Google
         ws.on('message', (message) => {
             if (googleWs && googleWs.readyState === WebSocket.OPEN) {
                 googleWs.send(message);
@@ -105,8 +99,8 @@ app.prepare().then(() => {
         });
     });
 
-    server.listen(PORT, (err) => {
+    server.listen(PORT, '0.0.0.0', (err) => {
         if (err) throw err;
-        console.log(`> Ready on http://localhost:${PORT} with WebSocket support`);
+        console.log(`> Ready on http://0.0.0.0:${PORT} with WebSocket Setup`);
     });
 });
