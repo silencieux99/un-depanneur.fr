@@ -42,7 +42,7 @@ export default function Home() {
             <VoiceAssistant />
 
             {/* HIGH VISIBILITY CTA - PURE WHITE & NEON GLOW */}
-            <p className="text-sm md:text-base text-white font-black uppercase tracking-[0.2em] animate-pulse drop-shadow-[0_0_15px_rgba(255,255,255,0.8)] border-b-2 border-white/20 pb-1">
+            <p className="text-sm md:text-base text-white font-black uppercase tracking-[0.2em] animate-pulse drop-shadow-[0_0_15px_rgba(255,255,255,0.8)]">
               Appuyez pour parler au dispatcheur
             </p>
           </div>
