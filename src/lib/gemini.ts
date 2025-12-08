@@ -4,7 +4,7 @@ const apiKey = process.env.GOOGLE_API_KEY!;
 const genAI = new GoogleGenerativeAI(apiKey);
 
 export const model = genAI.getGenerativeModel({
-    model: "gemini-flash-latest",
+    model: "gemini-2.5-flash-live",
     generationConfig: {
         maxOutputTokens: 200,
         temperature: 0.7,
