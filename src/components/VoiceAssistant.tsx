@@ -24,6 +24,7 @@ export default function VoiceAssistant() {
     const [isProcessing, setIsProcessing] = useState(false);
     const [isSpeaking, setIsSpeaking] = useState(false);
     const [messages, setMessages] = useState<Message[]>([]);
+    const messagesRef = useRef<Message[]>([]); // Ref to keep track of messages in event listeners
     const [transcript, setTranscript] = useState("");
     const [completed, setCompleted] = useState(false);
     const [mounted, setMounted] = useState(false);
@@ -42,8 +43,6 @@ export default function VoiceAssistant() {
                 recognition.continuous = true;
                 recognition.interimResults = true;
                 recognition.lang = "fr-FR";
-
-                let silenceTimer: NodeJS.Timeout;
 
                 recognition.onstart = () => setIsListening(true);
                 recognition.onend = () => setIsListening(false);
@@ -73,6 +72,26 @@ export default function VoiceAssistant() {
             synthRef.current = window.speechSynthesis;
         }
     }, []);
+
+    // Cleanup when leaving chat mode
+    useEffect(() => {
+        if (captureMode === "idle") {
+            try {
+                recognitionRef.current?.stop();
+            } catch (e) { }
+            if (synthRef.current) synthRef.current.cancel();
+            setIsListening(false);
+            setIsSpeaking(false);
+        } else if (captureMode === "chat" && recognitionRef.current && !isListening) {
+            // Auto-start on enter chat
+            console.log("Auto-starting microphone...");
+            try {
+                recognitionRef.current.start();
+            } catch (e) {
+                console.error("Auto-start mic failed (already active?):", e);
+            }
+        }
+    }, [captureMode]);
 
     const triggerGeolocation = () => {
         setGeoStatus("locating");
@@ -132,7 +151,12 @@ export default function VoiceAssistant() {
         utterance.rate = 1.1;
 
         const voices = synthRef.current.getVoices();
-        const frVoice = voices.find(v => v.lang.includes("fr") && v.name.includes("Google"));
+        const frVoice = voices.find(v =>
+            (v.name.includes("Google") && v.lang === "fr-FR") ||
+            (v.name.includes("Amelie") && v.lang.includes("fr")) ||
+            (v.lang === "fr-FR" && v.name.includes("Female"))
+        ) || voices.find(v => v.lang === "fr-FR");
+
         if (frVoice) utterance.voice = frVoice;
 
         utterance.onstart = () => setIsSpeaking(true);
@@ -143,8 +167,12 @@ export default function VoiceAssistant() {
     const handleUserMessage = async (text: string) => {
         setIsProcessing(true);
         const userMsg: Message = { role: "user", parts: [{ text }] };
-        const newHistory = [...messages, userMsg];
+
+        const currentHistory = messagesRef.current;
+        const newHistory = [...currentHistory, userMsg];
+
         setMessages(newHistory);
+        messagesRef.current = newHistory;
 
         try {
             const res = await fetch("/api/chat", {
@@ -161,7 +189,9 @@ export default function VoiceAssistant() {
 
             if (data.response) {
                 const aiMsg: Message = { role: "model", parts: [{ text: data.response }] };
-                setMessages([...newHistory, aiMsg]);
+                const updatedHistory = [...newHistory, aiMsg];
+                setMessages(updatedHistory);
+                messagesRef.current = updatedHistory;
                 speak(data.response);
                 if (data.completed) setCompleted(true);
             }
@@ -174,14 +204,16 @@ export default function VoiceAssistant() {
 
     const toggleListening = () => {
         if (isListening) {
-            recognitionRef.current?.stop();
+            // "Hang Up" logic -> Close conversation
+            setCaptureMode("idle");
         } else {
-            setTranscript(""); // Clear previous transcript
+            setTranscript("");
             if (synthRef.current?.speaking) synthRef.current.cancel();
             try {
                 recognitionRef.current?.start();
+                setIsListening(true);
             } catch (e) {
-                console.error("Mic start error (already started?)", e);
+                console.error("Mic start error", e);
             }
         }
     };
@@ -208,48 +240,106 @@ export default function VoiceAssistant() {
                         </div>
                     </motion.div>
                 )}
+            </div>
 
-                {captureMode === "chat" && (
-                    <AnimatePresence>
+            {/* VOICE CHAT INTERFACE - PORTAL TO BODY */}
+            {mounted && createPortal(
+                <AnimatePresence>
+                    {captureMode === "chat" && (
                         <motion.div
-                            initial={{ scale: 0.8, opacity: 0 }}
-                            animate={{ scale: 1, opacity: 1 }}
-                            className="relative group bg-slate-900/95 backdrop-blur-xl border border-blue-500/30 rounded-[2rem] shadow-2xl flex items-center overflow-hidden w-full max-w-lg p-2 rounded-3xl ring-1 ring-blue-500/20"
+                            initial={{ opacity: 0, scale: 0.95 }}
+                            animate={{ opacity: 1, scale: 1 }}
+                            exit={{ opacity: 0, scale: 0.95 }}
+                            className="fixed inset-0 z-[99999] flex flex-col items-center justify-between bg-black h-[100dvh] py-8 md:py-12 px-6"
                         >
-                            <div className="relative z-10">
-                                <button
-                                    onClick={toggleListening}
-                                    className={`w-14 h-14 rounded-full flex-shrink-0 flex items-center justify-center transition-all duration-300 border border-white/20 shadow-lg relative
-                                ${isListening
-                                            ? "bg-red-500 text-white border-red-400 shadow-[0_0_20px_rgba(239,68,68,0.5)]"
-                                            : isSpeaking
-                                                ? "bg-blue-500 text-white border-blue-400 shadow-[0_0_20px_rgba(59,130,246,0.5)]"
-                                                : "bg-white text-black hover:scale-105"
-                                        }`}
+                            {/* Full black backdrop to prevent any bleed-through */}
+                            <div className="absolute inset-0 bg-black z-0" />
+
+                            {/* Blur overlay on top */}
+                            <div className="absolute inset-0 backdrop-blur-xl bg-black/50 z-[1]" />
+
+                            {/* Top Bar: Status & Close */}
+                            <div className="w-full max-w-lg flex items-center justify-between relative z-20">
+                                <motion.div
+                                    initial={{ opacity: 0, x: -20 }}
+                                    animate={{ opacity: 1, x: 0 }}
+                                    className="flex items-center gap-2"
                                 >
-                                    {isProcessing ? (
-                                        <Loader2 className="w-6 h-6 animate-spin" />
-                                    ) : isListening ? (
-                                        <Mic className="w-6 h-6" />
-                                    ) : isSpeaking ? (
-                                        <Volume2 className="w-6 h-6 animate-pulse" />
-                                    ) : (
-                                        <MicOff className="w-6 h-6 opacity-70" />
-                                    )}
+                                    <div className={`w-2 h-2 rounded-full ${isListening ? "bg-red-500 animate-pulse" : isProcessing ? "bg-blue-500 animate-spin" : isSpeaking ? "bg-green-500" : "bg-slate-500"}`} />
+                                    <span className="text-blue-400 font-medium tracking-widest text-xs md:text-sm uppercase">
+                                        {isSpeaking ? "L'assistant parle" : isProcessing ? "Analyse..." : isListening ? "Écoute..." : "Pause"}
+                                    </span>
+                                </motion.div>
+
+                                <button
+                                    onClick={() => setCaptureMode("idle")}
+                                    className="p-3 text-white hover:text-red-400 transition-colors bg-white/10 hover:bg-red-500/20 rounded-full relative z-30 border border-white/20"
+                                >
+                                    <AlertCircle className="w-6 h-6 rotate-45" />
                                 </button>
                             </div>
 
-                            <div className="flex-1 px-4">
-                                <p className="text-sm font-medium text-white line-clamp-2">
-                                    {isSpeaking
-                                        ? messages[messages.length - 1]?.parts[0].text
-                                        : transcript || (isProcessing ? "Analyse en cours..." : "Je vous écoute...")}
+                            {/* Middle: Visuals & Text */}
+                            <div className="flex-1 flex flex-col items-center justify-center w-full max-w-lg gap-8 md:gap-12 relative z-20">
+                                {/* Waveform Visualizer */}
+                                <div className="h-24 md:h-32 flex items-center justify-center gap-1.5 md:gap-2">
+                                    {[...Array(9)].map((_, i) => (
+                                        <motion.div
+                                            key={i}
+                                            className={`w-2 md:w-3 rounded-full ${isSpeaking ? "bg-blue-500 shadow-[0_0_15px_#3b82f6]" : "bg-white/20"}`}
+                                            animate={{
+                                                height: isSpeaking
+                                                    ? [20, 40 + Math.random() * 60, 20]
+                                                    : isListening
+                                                        ? [15, 25 + Math.random() * 30, 15]
+                                                        : isProcessing
+                                                            ? [15, 20, 15]
+                                                            : 8,
+                                                opacity: isSpeaking || isListening ? 1 : 0.3
+                                            }}
+                                            transition={{
+                                                duration: isSpeaking ? 0.4 : 0.2,
+                                                repeat: Infinity,
+                                                repeatType: "mirror",
+                                                delay: i * 0.05,
+                                                ease: "easeInOut"
+                                            }}
+                                        />
+                                    ))}
+                                </div>
+
+                                {/* Transcript / Subtitles */}
+                                <div className="text-center w-full min-h-[80px]">
+                                    <p className="text-xl md:text-3xl font-light text-white leading-relaxed line-clamp-4">
+                                        "{transcript || (isSpeaking ? messages[messages.length - 1]?.parts[0].text : "...")}"
+                                    </p>
+                                </div>
+                            </div>
+
+                            {/* Bottom: Controls */}
+                            <div className="w-full max-w-lg flex flex-col items-center gap-6 relative z-50">
+                                <button
+                                    onClick={toggleListening}
+                                    className={`w-24 h-24 rounded-full flex items-center justify-center transition-all duration-200 border border-white/10 relative overflow-hidden group cursor-pointer active:scale-95
+                                        ${isListening
+                                            ? "bg-red-600 text-white border-red-500 shadow-[0_0_50px_rgba(220,38,38,0.6)]"
+                                            : "bg-white/10 text-white hover:bg-white/20"
+                                        }`}
+                                >
+                                    <div className={`absolute inset-0 bg-gradient-to-t from-black/20 to-transparent ${isListening ? 'opacity-0' : 'opacity-100'}`} />
+                                    {isListening ? <Mic className="w-10 h-10 animate-pulse" /> : <MicOff className="w-10 h-10 opacity-50" />}
+                                </button>
+
+                                <p className="text-xs text-white/30 text-center font-medium">
+                                    {isListening ? "Appuyez pour raccrocher" : "Appuyez pour parler"}
                                 </p>
                             </div>
+
                         </motion.div>
-                    </AnimatePresence>
-                )}
-            </div>
+                    )}
+                </AnimatePresence>,
+                document.body
+            )}
 
             {/* MODAL - PORTAL TO BODY */}
             {mounted && createPortal(
@@ -285,7 +375,7 @@ export default function VoiceAssistant() {
                                             <input
                                                 type="text"
                                                 required
-                                                className="w-full bg-slate-800/50 border border-slate-700 rounded-lg py-2.5 pl-10 pr-3 text-white text-sm focus:ring-1 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all placeholder:text-slate-600"
+                                                className="w-full bg-slate-800/50 border border-slate-700 rounded-lg py-2.5 pl-10 pr-3 text-white text-base focus:ring-1 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all placeholder:text-slate-600"
                                                 placeholder="Jean Dupont"
                                                 value={userInfo.name}
                                                 onChange={(e) => setUserInfo({ ...userInfo, name: e.target.value })}
@@ -300,7 +390,7 @@ export default function VoiceAssistant() {
                                             <input
                                                 type="tel"
                                                 required
-                                                className="w-full bg-slate-800/50 border border-slate-700 rounded-lg py-2.5 pl-10 pr-3 text-white text-sm focus:ring-1 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all placeholder:text-slate-600"
+                                                className="w-full bg-slate-800/50 border border-slate-700 rounded-lg py-2.5 pl-10 pr-3 text-white text-base focus:ring-1 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all placeholder:text-slate-600"
                                                 placeholder="06 12 34 56 78"
                                                 value={userInfo.phone}
                                                 onChange={(e) => setUserInfo({ ...userInfo, phone: e.target.value })}
