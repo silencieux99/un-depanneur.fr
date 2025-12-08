@@ -30,7 +30,6 @@ app.prepare().then(() => {
                 wss.emit('connection', ws, request);
             });
         }
-        // IMPORTANT: Else do NOTHING. Let Next.js HMR handle other paths.
     });
 
     wss.on('connection', (ws) => {
@@ -43,7 +42,7 @@ app.prepare().then(() => {
             return;
         }
 
-        // Connexion à Gemini Live API (v1alpha Bidi)
+        // Connexion à Gemini Live API (v1beta pour modèle preview)
         const targetUrl = `wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent?key=${apiKey}`;
 
         let googleWs = null;
@@ -62,7 +61,10 @@ app.prepare().then(() => {
                 setup: {
                     model: "models/gemini-2.5-flash-native-audio-preview-09-2025",
                     generationConfig: {
-                        responseModalities: ["AUDIO"]
+                        responseModalities: ["AUDIO"],
+                        speechConfig: {
+                            voiceConfig: { prebuiltVoiceConfig: { voiceName: "Aoede" } }
+                        }
                     }
                 }
             };
