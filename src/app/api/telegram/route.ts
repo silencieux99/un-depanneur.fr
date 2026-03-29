@@ -11,10 +11,16 @@ export async function POST(req: Request) {
     try {
         const { userInfo, history } = await req.json();
 
-        let message = `🚨 **NOUVEAU LEAD VOICE ASSISTANT** 🚨\n\n`;
+        let message = `🚨 **NOUVEAU LEAD BILL DÉPANNAGE** 🚨\n\n`;
         message += `👤 **Nom:** ${userInfo.name}\n`;
         message += `📞 **Tél:** ${userInfo.phone}\n`;
 
+        if (userInfo.city) {
+            message += `🏙️ **Ville:** ${userInfo.city}\n`;
+        }
+        if (userInfo.manualAddress) {
+            message += `📝 **Adresse saisie:** ${userInfo.manualAddress}\n`;
+        }
         if (userInfo.location) {
             message += `📍 **GPS:** https://www.google.com/maps?q=${userInfo.location.lat},${userInfo.location.lng}\n`;
         } else {

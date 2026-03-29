@@ -3,7 +3,7 @@
 import { useState, useEffect, useRef } from "react";
 import { createPortal } from "react-dom";
 import { motion, AnimatePresence } from "framer-motion";
-import { Volume2, Loader2, CheckCircle2, User, Phone, ShieldCheck, Activity, X } from "lucide-react";
+import { Volume2, Loader2, CheckCircle2, User, Phone, Activity, X, MapPin, Navigation } from "lucide-react";
 
 // --- Configuration ---
 const SAMPLE_RATE = 16000;
@@ -121,11 +121,13 @@ type UserInfo = {
     name: string;
     phone: string;
     location: { lat: number; lng: number } | null;
+    city: string;
+    manualAddress: string;
 };
 
 export default function VoiceAssistant() {
     const [captureMode, setCaptureMode] = useState<"idle" | "form" | "chat">("idle");
-    const [userInfo, setUserInfo] = useState<UserInfo>({ name: "", phone: "", location: null });
+    const [userInfo, setUserInfo] = useState<UserInfo>({ name: "", phone: "", location: null, city: "", manualAddress: "" });
     const [geoStatus, setGeoStatus] = useState<"idle" | "locating" | "success" | "error" | "denied">("idle");
 
     const [status, setStatus] = useState<"disconnected" | "connecting" | "connected" | "listening" | "speaking">("disconnected");
@@ -135,7 +137,7 @@ export default function VoiceAssistant() {
     // High Performance Audio Refs
     const volumeRef = useRef(0); // Mutable ref for animation loop (No Re-renders)
 
-    const userInfoRef = useRef<UserInfo>({ name: "", phone: "", location: null });
+    const userInfoRef = useRef<UserInfo>({ name: "", phone: "", location: null, city: "", manualAddress: "" });
     const sessionActiveRef = useRef(false);
     const wsRef = useRef<WebSocket | null>(null);
     const audioCtxRef = useRef<AudioContext | null>(null);
@@ -193,21 +195,29 @@ export default function VoiceAssistant() {
                 setStatus("connected");
                 initAudioInput();
 
+                const locationInfo = userInfoRef.current.city 
+                    ? `Je vois que vous êtes au niveau de ${userInfoRef.current.city}.`
+                    : userInfoRef.current.manualAddress 
+                        ? `Vous m'avez indiqué être à ${userInfoRef.current.manualAddress}.`
+                        : "";
+
                 ws.send(JSON.stringify({
                     client_content: {
                         turns: [{
                             role: "user",
                             parts: [{
-                                text: `[SYSTEM] Tu es Sarah de l'assistance dépannage. Le client est ${userInfoRef.current.name}.
-TON : Chaleureux, naturel, très empathique et souriant (friendly). Pas de phrases robotiques.
+                                text: `[SYSTEM] Tu es l'assistante vocale de Bill Dépannage. Le client s'appelle ${userInfoRef.current.name}.
+TON : Chaleureux, naturel, très empathique et souriant (friendly). Pas de phrases robotiques. Tu es professionnelle mais accessible.
+
+LOCALISATION CLIENT : ${locationInfo || "Non détectée"}
 
 SCÉNARIO :
-1. Commence JOYEUSEMENT par : "Bonjour ${userInfoRef.current.name} ! Je vous écoute, dites-moi tout, quel est le souci avec votre véhicule ?"
-2. Écoute le problème.
-3. SI URGENCE : Rassure tout de suite ("Ouch, pas de panique, on gère ça !"), confirme que tu as bien reçu sa géolocalisation, et promets qu'un technicien le rappelle dans 5 minutes PILE.
-4. SI RENDEZ-VOUS : Dis "C'est noté ! Je transmets ça au planning, on vous rappelle très vite pour confirmer le créneau."
-5. TOUJOURS FINIR par : "Est-ce que je peux faire autre chose pour vous aider ?"
-6. Si le client dit NON : Dis chaleureusement "Super, je lance l'intervention. Vous pouvez raccrocher. Courage et bonne journée !" et arrête de parler.` }]
+1. Commence TOUJOURS par : "Bienvenue chez Bill Dépannage ! Bonjour ${userInfoRef.current.name} !" ${locationInfo ? `puis enchaîne avec "${locationInfo}"` : ""} puis demande "Dites-moi, quel est le souci avec votre véhicule ?"
+2. Écoute attentivement le problème du client.
+3. SI URGENCE (panne sur route, accident, véhicule immobilisé) : Rassure immédiatement ("Pas de panique ${userInfoRef.current.name}, on s'occupe de tout !"), confirme la localisation, et dis qu'un dépanneur sera sur place dans les 30 minutes maximum.
+4. SI RENDEZ-VOUS ou diagnostic : Dis "C'est noté ! Je transmets votre demande à notre équipe, on vous rappelle dans les 5 minutes pour confirmer."
+5. TOUJOURS FINIR par : "Est-ce que je peux faire autre chose pour vous ?"
+6. Si le client dit NON ou que c'est bon : Conclus chaleureusement "Parfait ${userInfoRef.current.name}, c'est en route ! L'équipe Bill Dépannage vous rappelle très vite. Bonne journée et courage !" puis arrête de parler.` }]
                         }],
                         turn_complete: true
                     }
@@ -357,9 +367,26 @@ SCÉNARIO :
         setGeoStatus("locating");
         if (!navigator.geolocation) { setGeoStatus("error"); return; }
         navigator.geolocation.getCurrentPosition(
-            (pos) => { setUserInfo(p => ({ ...p, location: { lat: pos.coords.latitude, lng: pos.coords.longitude } })); setGeoStatus("success"); },
+            async (pos) => {
+                const { latitude, longitude } = pos.coords;
+                setUserInfo(p => ({ ...p, location: { lat: latitude, lng: longitude } }));
+                
+                try {
+                    const res = await fetch(`https://nominatim.openstreetmap.org/reverse?lat=${latitude}&lon=${longitude}&format=json&accept-language=fr`);
+                    const data = await res.json();
+                    const city = data.address?.city || data.address?.town || data.address?.village || data.address?.municipality || "";
+                    if (city) {
+                        setUserInfo(p => ({ ...p, city }));
+                        setGeoStatus("success");
+                    } else {
+                        setGeoStatus("error");
+                    }
+                } catch {
+                    setGeoStatus("error");
+                }
+            },
             () => setGeoStatus("error"),
-            { enableHighAccuracy: true }
+            { enableHighAccuracy: true, timeout: 10000 }
         );
     };
 
@@ -408,28 +435,107 @@ SCÉNARIO :
                                 onClick={(e) => e.stopPropagation()}
                                 className="w-full max-w-sm bg-[#050510]/90 backdrop-blur-2xl border border-white/10 rounded-2xl shadow-2xl overflow-hidden ring-1 ring-white/5"
                             >
-                                <div className="px-8 pt-8 pb-6 text-center">
-                                    <div className="w-12 h-12 bg-blue-500/10 rounded-full flex items-center justify-center mx-auto mb-4 border border-blue-500/20">
-                                        <ShieldCheck className="w-6 h-6 text-blue-400" />
+                                <div className="px-6 md:px-8 pt-8 pb-4 text-center">
+                                    <div className="w-14 h-14 bg-gradient-to-br from-blue-500 to-indigo-600 rounded-2xl flex items-center justify-center mx-auto mb-4 shadow-lg shadow-blue-500/30">
+                                        <span className="text-2xl font-black text-white">B</span>
                                     </div>
-                                    <h3 className="text-xl font-medium text-white tracking-tight">Connexion Sécurisée</h3>
+                                    <h3 className="text-xl font-bold text-white tracking-tight">Bill Dépannage</h3>
                                     <p className="text-sm text-slate-400 mt-2 font-light leading-relaxed">
-                                        Veuillez vous identifier pour accéder au service d'assistance prioritaire.
+                                        Assistance 24h/24 • Intervention rapide
                                     </p>
                                 </div>
-                                <form onSubmit={handleFormSubmit} className="px-8 pb-8 space-y-5">
+                                <form onSubmit={handleFormSubmit} className="px-6 md:px-8 pb-8 space-y-5">
                                     <div className="space-y-4">
                                         <div className="group relative">
                                             <User className="absolute left-0 top-3 w-5 h-5 text-slate-500 group-focus-within:text-blue-400 transition-colors" />
-                                            <input type="text" required placeholder="Votre Nom" className="w-full bg-transparent border-b border-white/10 py-2.5 pl-8 text-white placeholder:text-slate-600 focus:border-blue-500 outline-none transition-all font-light" value={userInfo.name} onChange={e => setUserInfo({ ...userInfo, name: e.target.value })} />
+                                            <input 
+                                                type="text" 
+                                                required 
+                                                placeholder="Votre Nom" 
+                                                autoComplete="name"
+                                                enterKeyHint="next"
+                                                className="w-full bg-transparent border-b border-white/10 py-3 pl-8 text-base text-white placeholder:text-slate-600 focus:border-blue-500 outline-none transition-all font-light" 
+                                                value={userInfo.name} 
+                                                onChange={e => setUserInfo({ ...userInfo, name: e.target.value })} 
+                                            />
                                         </div>
                                         <div className="group relative">
                                             <Phone className="absolute left-0 top-3 w-5 h-5 text-slate-500 group-focus-within:text-blue-400 transition-colors" />
-                                            <input type="tel" required placeholder="Numéro de Téléphone" className="w-full bg-transparent border-b border-white/10 py-2.5 pl-8 text-white placeholder:text-slate-600 focus:border-blue-500 outline-none transition-all font-light" value={userInfo.phone} onChange={e => setUserInfo({ ...userInfo, phone: e.target.value })} />
+                                            <input 
+                                                type="tel" 
+                                                required 
+                                                placeholder="Numéro de Téléphone" 
+                                                autoComplete="tel"
+                                                inputMode="tel"
+                                                enterKeyHint="next"
+                                                className="w-full bg-transparent border-b border-white/10 py-3 pl-8 text-base text-white placeholder:text-slate-600 focus:border-blue-500 outline-none transition-all font-light" 
+                                                value={userInfo.phone} 
+                                                onChange={e => setUserInfo({ ...userInfo, phone: e.target.value })} 
+                                            />
                                         </div>
                                     </div>
-                                    <div className="flex items-center justify-center gap-2 py-2"><span className={`text-xs ${geoStatus === 'success' ? 'text-emerald-500' : 'text-slate-500'}`}>{geoStatus === 'locating' ? 'Localisation en cours...' : geoStatus === 'success' ? 'Position sécurisée' : 'Localisation requise'}</span></div>
-                                    <button type="submit" disabled={!userInfo.name || !userInfo.phone} className="w-full bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white font-medium py-3.5 rounded-xl shadow-lg shadow-blue-900/20 transition-all active:scale-[0.98] disabled:opacity-50 disabled:cursor-not-allowed">Établir la Connexion</button>
+
+                                    {/* Location Status */}
+                                    <div className="py-3">
+                                        {geoStatus === 'locating' && (
+                                            <div className="flex items-center justify-center gap-2 text-amber-400">
+                                                <Loader2 className="w-4 h-4 animate-spin" />
+                                                <span className="text-sm">Localisation en cours...</span>
+                                            </div>
+                                        )}
+                                        
+                                        {geoStatus === 'success' && userInfo.city && (
+                                            <div className="flex items-center justify-center gap-2 text-emerald-400 bg-emerald-500/10 rounded-xl py-3 px-4 border border-emerald-500/20">
+                                                <Navigation className="w-4 h-4" />
+                                                <span className="text-sm font-medium">{userInfo.city}</span>
+                                                <CheckCircle2 className="w-4 h-4" />
+                                            </div>
+                                        )}
+                                        
+                                        {geoStatus === 'error' && !userInfo.manualAddress && (
+                                            <motion.div 
+                                                initial={{ opacity: 0, height: 0 }} 
+                                                animate={{ opacity: 1, height: 'auto' }}
+                                                className="space-y-3"
+                                            >
+                                                <div className="flex items-center justify-center gap-2 text-amber-400 text-sm">
+                                                    <MapPin className="w-4 h-4" />
+                                                    <span>Localisation non détectée</span>
+                                                </div>
+                                                <div className="relative">
+                                                    <MapPin className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-500" />
+                                                    <input 
+                                                        type="text" 
+                                                        placeholder="Où êtes-vous ? (ville, adresse...)"
+                                                        autoComplete="street-address"
+                                                        enterKeyHint="done"
+                                                        className="w-full bg-white/5 border border-white/10 rounded-2xl py-4 pl-12 pr-4 text-base text-white placeholder:text-slate-500 focus:border-blue-500 focus:bg-white/10 outline-none transition-all"
+                                                        value={userInfo.manualAddress}
+                                                        onChange={e => setUserInfo({ ...userInfo, manualAddress: e.target.value })}
+                                                    />
+                                                </div>
+                                                <p className="text-xs text-slate-500 text-center">
+                                                    Ex: Porte de Vincennes, Paris 12
+                                                </p>
+                                            </motion.div>
+                                        )}
+
+                                        {userInfo.manualAddress && (
+                                            <div className="flex items-center justify-center gap-2 text-blue-400 bg-blue-500/10 rounded-xl py-3 px-4 border border-blue-500/20">
+                                                <MapPin className="w-4 h-4" />
+                                                <span className="text-sm font-medium">{userInfo.manualAddress}</span>
+                                                <CheckCircle2 className="w-4 h-4" />
+                                            </div>
+                                        )}
+                                    </div>
+
+                                    <button 
+                                        type="submit" 
+                                        disabled={!userInfo.name || !userInfo.phone || geoStatus === 'locating' || (geoStatus === 'error' && !userInfo.manualAddress)}
+                                        className="w-full bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white font-semibold py-4 rounded-2xl shadow-lg shadow-blue-900/30 transition-all active:scale-[0.98] disabled:opacity-40 disabled:cursor-not-allowed text-base"
+                                    >
+                                        {geoStatus === 'locating' ? 'Localisation...' : 'Appeler Bill Dépannage'}
+                                    </button>
                                 </form>
                             </motion.div>
                         </motion.div>
@@ -438,14 +544,20 @@ SCÉNARIO :
                     {captureMode === "chat" && (
                         <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="fixed inset-0 z-[99999] bg-black flex flex-col items-center justify-center overflow-hidden">
                             <div className="absolute inset-0 bg-[radial-gradient(circle_at_center,_var(--tw-gradient-stops))] from-blue-900/10 via-black to-black opacity-80" />
-                            <div className="absolute top-0 left-0 w-full p-6 flex justify-between items-start z-50">
-                                <div>
-                                    <div className="flex items-center gap-2 backdrop-blur-md bg-white/5 rounded-full px-4 py-1.5 border border-white/5">
-                                        <Activity className={`w-4 h-4 ${status === 'connected' || status === 'listening' ? "text-emerald-500" : "text-amber-500"}`} />
-                                        <span className="text-[10px] font-mono text-white/60 uppercase tracking-[0.2em] pt-0.5">{status === 'connected' ? 'CANAL SÉCURISÉ' : status === 'listening' ? 'ÉCOUTE ACTIVE' : status === 'speaking' ? 'TRANSMISSION IA' : 'INITIALISATION...'}</span>
+                            <div className="absolute top-0 left-0 w-full p-4 md:p-6 flex justify-between items-start z-50">
+                                <div className="flex flex-col gap-2">
+                                    <div className="flex items-center gap-2 backdrop-blur-md bg-white/5 rounded-2xl px-4 py-2 border border-white/10">
+                                        <div className="w-8 h-8 bg-gradient-to-br from-blue-500 to-indigo-600 rounded-lg flex items-center justify-center shadow-lg">
+                                            <span className="text-sm font-black text-white">B</span>
+                                        </div>
+                                        <span className="text-sm font-semibold text-white">Bill Dépannage</span>
+                                    </div>
+                                    <div className="flex items-center gap-2 backdrop-blur-md bg-white/5 rounded-full px-3 py-1 border border-white/5 w-fit">
+                                        <Activity className={`w-3 h-3 ${status === 'connected' || status === 'listening' ? "text-emerald-500" : status === 'speaking' ? "text-blue-400" : "text-amber-500"}`} />
+                                        <span className="text-[10px] font-mono text-white/60 uppercase tracking-wider">{status === 'connected' ? 'CONNECTÉ' : status === 'listening' ? 'ÉCOUTE...' : status === 'speaking' ? 'PARLE...' : 'CONNEXION...'}</span>
                                     </div>
                                 </div>
-                                <button onClick={() => setCaptureMode("idle")} className="p-3 text-white/50 hover:text-white transition-colors bg-white/5 hover:bg-white/10 rounded-full backdrop-blur-md"><X className="w-6 h-6" /></button>
+                                <button onClick={() => setCaptureMode("idle")} className="p-3 text-white/50 hover:text-white transition-colors bg-white/5 hover:bg-white/10 rounded-full backdrop-blur-md border border-white/10"><X className="w-6 h-6" /></button>
                             </div>
 
                             {/* OPTIMIZED VISUALIZER */}
